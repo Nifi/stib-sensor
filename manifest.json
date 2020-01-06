@@ -1,0 +1,8 @@
+{
+  "domain": "stib",
+  "name": "stib",
+  "documentation": "https://github.com/danito/HA-Config/blob/master/custom_components/sensor/README.md",
+  "requirements": [],
+  "dependencies": [],
+  "codeowners": ["@danito"]
+}

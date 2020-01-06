@@ -9,6 +9,7 @@ cunfiguration.yaml:
 ```yaml
 sensor:
   - platform: stib
+    api_key: '< STIB access token from opendata.stib-mivb.be >'
     station_ids:
       - 1234
       - 4567

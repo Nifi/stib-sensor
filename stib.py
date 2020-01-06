@@ -10,8 +10,6 @@ import logging
 import re
 from datetime import datetime, timedelta
 import requests
-#import xmldict
-from lxml import etree as ET
 import voluptuous as vol
 
 from homeassistant.components.sensor import PLATFORM_SCHEMA
@@ -22,7 +20,8 @@ import homeassistant.helpers.config_validation as cv
 
 _LOGGER = logging.getLogger(__name__)
 
-_RESOURCE = 'http://m.stib.be/api/getwaitingtimes.php'
+_RESOURCE = 'https://opendata-api.stib-mivb.be/OperationMonitoring/4.0/PassingTimeByPoint/'
+_POINT_DETAIL_URL = 'https://opendata-api.stib-mivb.be/NetworkDescription/1.0/PointDetail/'
 
 ATTR_NEXT = 'Next departure'
 ATTR_UPCOMING = 'Upcoming departure'
@@ -36,11 +35,12 @@ ATTR_ATTRIBUTION = 'Data provided by api.stib.be'
 
 ICON = 'mdi:bus'
 CONF_STOP_LIST = 'station_ids'
+CONF_API_KEY = "api_key"
 SCAN_INTERVAL = timedelta(seconds=30)
 DEFAULT_NAME = 'STIB'
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-    vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
+    vol.Required(CONF_API_KEY): cv.string,
     vol.Optional(CONF_STOP_LIST, 'station_filter'):
             vol.All(
                 cv.ensure_list,
@@ -50,12 +50,13 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
 
 
 def setup_platform(hass, config, add_devices, discovery_info=None):
+    api_key = config[CONF_API_KEY]
     sensors = []
     stations_list = set(config.get(CONF_STOP_LIST, []))
     url = _RESOURCE
     interval = SCAN_INTERVAL
     for station in stations_list:
-       d = StibData(station)
+       d = StibData(station,  api_key)
        d.update()
        data = d.stop_data
        lines = data['lines']
@@ -128,7 +129,8 @@ class StibSensor(Entity):
             lines = stop_data['lines']
             self._stop_name = stop_data['stop_name']
             for o_line in lines:
-                all_line_id = lines[o_line][0]['mode'] + lines[o_line][0]['line']
+                # all_line_id = lines[o_line][0]['mode'] + lines[o_line][0]['line']
+                all_line_id = lines[o_line][0]['line']
                 other_lines.append(all_line_id)
             self._lines = other_lines
             if line in lines:
@@ -137,7 +139,7 @@ class StibSensor(Entity):
                     t.append(m)
                     d[m] = lines[line][l]['destination']
                     line_id = lines[line][l]['line']
-                    self._mode  = lines[line][l]['mode']
+                    self._mode  = None # lines[line][l]['mode']
             else:
                 _LOGGER.info("Line %s doesn't stop at stop %s. Check your line number",self._line, self._stop_name)
             if len(t) is not 0:
@@ -145,47 +147,51 @@ class StibSensor(Entity):
                 self._next = min(t)
                 self._upcoming = max(t)
                 self._line_id = line_id
-                self._destination = d[minutes].title()
+                self._destination = d[self._next].title()
                 self._upcoming_destination = d[self._upcoming].title()
-                self._name = "stib " + self._stop + " " + self._stop_name + " " + self._mode + line_id
-                state = self._next + " (" + self._destination + ")"
+                # self._name = "stib " + self._stop + " " + self._stop_name + " " + self._mode + line_id
+                self._name = line_id + " " + self._stop_name
+                state = str(self._next) + " (" + self._destination + ")"
                 if len(t) == 2:
-                    state = state + " - " + self._upcoming + " (" + self._upcoming_destination + ")"
-            
-        if minutes == -1:
-            self._state  = STATE_UNKNOWN
-        else: 
-            self._state = state
+                    state = state + " - " + str(self._upcoming) + " (" + self._upcoming_destination + ")"
+                    
+        self._state = state
 
 
 
 class StibData(object):
-    def __init__(self, stop):
+    def __init__(self, stop,  api_key):
         self.stop = stop
         self.stop_data = {}
+        self.api_key = api_key
+        response = requests.get(_POINT_DETAIL_URL + self.stop, headers={'Accept': 'application/json', 'Authorization': 'Bearer '  + self.api_key})
+        try:
+            self.stop_name = response.json()['points'][0]['name']['fr']
+        except:
+             _LOGGER.error("STIB Wrong stopID, check %s", self.stop)
 
     def update(self):
-        response = requests.get(_RESOURCE, params  = {'halt': self.stop})
+        response = requests.get(_RESOURCE + self.stop, headers={'Accept': 'application/json', 'Authorization': 'Bearer  '  + self.api_key})
         stop_waiting_times = {}
-        stop_name = "n/a"
+        stop_waiting_times['stop_name'] = self.stop_name
         if response.status_code == 200:
-           r_xml = response.content
-           r_tree = ET.XML(r_xml)
-           stop_name = r_tree.xpath('/waitingtimes/stopname/text()')
-           stop_name = stop_name[0]
-           if stop_name == "":
-               _LOGGER.error("STIB Wrong stopID, check %s", result.url)
+           passing_times = response.json()['points'][0]['passingTimes']
             
-           stop_waiting_times['stop_name'] = stop_name
            stop_waiting_times['lines'] = {}
-           for wt in r_tree.xpath('/waitingtimes/waitingtime'):
-               l = '0'
+           
+           for passing_time in passing_times:
+               line_id = passing_time['lineId']
+               destination = passing_time['destination']['fr']
+               arrival_time = passing_time['expectedArrivalTime']
+               arrival_datetime = datetime.strptime(arrival_time.split('+')[0], '%Y-%m-%dT%H:%M:%S')
+               minutes = divmod((arrival_datetime - datetime.now()).seconds, 60)[0]
+               
                wt_tmp = {}
-               for c in wt.getchildren():
-                   if c.tag == 'line':
-                       l = c.text
-                   wt_tmp[c.tag] = c.text
-               l_key = 'line_' + l
+               wt_tmp['line'] = line_id
+               wt_tmp['minutes'] = minutes
+               wt_tmp['destination'] = destination
+               
+               l_key = 'line_' + line_id
                l_idx = 0
                if l_key in stop_waiting_times['lines']:
                    l_idx = len(stop_waiting_times['lines'][l_key])
