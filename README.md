@@ -2,9 +2,9 @@
 Brussels public transport 
 
 ## Install
-copy stib.py to custom_components/sensor/
+copy these files to custom_components/stib/
 
-cunfiguration.yaml:
+configuration.yaml:
 
 ```yaml
 sensor:
