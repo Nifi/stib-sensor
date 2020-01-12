@@ -58,15 +58,15 @@ sensor.stib_8021_1      5 (Gare De L'Ouest) - 15 (Gare De L'Ouest)
 Other attributes are :
 ```json
 {
-  "stop_name": Gare Centrale
-  "next_departure": 5
-  "next_destination": Gare De L'Ouest
-  "upcoming_departure": 15
-  "upcoming_destination": Gare De L'Ouest
-  "line": 1
-  "attribution": Data provided by opendata-api.stib-mivb.be
-  "friendly_name": stib 8021  1
-  "icon": mdi:bus
+  "stop_name": "Gare Centrale",
+  "next_departure": "5",
+  "next_destination": "Gare De L'Ouest",
+  "upcoming_departure": "15",
+  "upcoming_destination": "Gare De L'Ouest",
+  "line": "1",
+  "attribution": "Data provided by opendata-api.stib-mivb.be",
+  "friendly_name": "stib 8021  1",
+  "icon": "mdi:bus"
 }
 ```
 
