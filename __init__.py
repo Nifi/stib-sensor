@@ -1,1 +1,1 @@
-###The stib component
+"""The stib component."""

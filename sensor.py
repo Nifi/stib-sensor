@@ -6,60 +6,70 @@ import voluptuous as vol
 
 from homeassistant.components.sensor import PLATFORM_SCHEMA
 from homeassistant.helpers.entity import Entity
-from homeassistant.util import Throttle
-from homeassistant.const import CONF_NAME, ATTR_ATTRIBUTION, STATE_UNKNOWN
+from homeassistant.const import ATTR_ATTRIBUTION, STATE_UNKNOWN
 import homeassistant.helpers.config_validation as cv
 
 _LOGGER = logging.getLogger(__name__)
 
-_RESOURCE = 'https://opendata-api.stib-mivb.be/OperationMonitoring/4.0/PassingTimeByPoint/'
-_POINT_DETAIL_URL = 'https://opendata-api.stib-mivb.be/NetworkDescription/1.0/PointDetail/'
+_POINT_DETAIL_URL = (
+    "https://opendata-api.stib-mivb.be/NetworkDescription/1.0/PointDetail/"
+)
+_PASSING_TIME_URL = (
+    "https://opendata-api.stib-mivb.be/OperationMonitoring/4.0/PassingTimeByPoint/"
+)
 
-ATTR_NEXT = 'next_departure'
-ATTR_UPCOMING = 'upcoming_departure'
-ATTR_STOPNAME = 'stop_name'
-ATTR_NEXT_DESTINATION = 'next_destination'
-ATTR_UPCOMING_DESTINATION = 'upcoming_destination'
-ATTR_LINE_ID = 'line'
-ATTR_ATTRIBUTION = 'Data provided by opendata-api.stib-mivb.be'
+ATTR_NEXT = "next_departure"
+ATTR_UPCOMING = "upcoming_departure"
+ATTR_STOPNAME = "stop_name"
+ATTR_NEXT_DESTINATION = "next_destination"
+ATTR_UPCOMING_DESTINATION = "upcoming_destination"
+ATTR_LINE_ID = "line"
 
+ATTRIBUTION = "Data provided by opendata-api.stib-mivb.be"
 
-CONF_STOP_LIST = 'station_ids'
+CONF_STOP_LIST = "station_ids"
 CONF_API_KEY = "api_key"
-SCAN_INTERVAL = timedelta(seconds=30)
-DEFAULT_NAME = 'STIB'
+CONF_LANG = "language"
+DEFAULT_LANG = "fr"
+SCAN_INTERVAL = timedelta(seconds=20)
+DEFAULT_NAME = "STIB"
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-    vol.Required(CONF_API_KEY): cv.string,
-    vol.Optional(CONF_STOP_LIST, 'station_filter'):
-            vol.All(
-                cv.ensure_list,
-                vol.Length(min=1),
-                [cv.string])
-})
+PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
+    {
+        vol.Required(CONF_API_KEY): cv.string,
+        vol.Optional(CONF_STOP_LIST, "station_filter"): vol.All(
+            cv.ensure_list, vol.Length(min=1), [cv.string]
+        ),
+        vol.Optional(CONF_LANG, default=DEFAULT_LANG): vol.In(["fr", "nl"]),
+    }
+)
 
 
 def setup_platform(hass, config, add_devices, discovery_info=None):
+    """Create the sensor."""
     api_key = config[CONF_API_KEY]
-    sensors = []
     stations_list = set(config.get(CONF_STOP_LIST, []))
-    interval = SCAN_INTERVAL
-    for station in stations_list:
-        data = StibData(station,  api_key)
-        data.update()
-        stop_name = data.stop_name
-        for line in data.lines:
-            sensors.append(StibSensor(station, line, data, stop_name))
+    lang = config[CONF_LANG]
+    stib_data = StibData(stations_list, api_key, lang)
+    stib_data.update()
+    sensors = []
+    for station, point_lines in stib_data.lines.items():
+        stop_name = stib_data.stop_names[station]
+        for line in point_lines:
+            sensors.append(StibSensor(station, line, stib_data, stop_name))
     add_devices(sensors, True)
 
 
 class StibSensor(Entity):
+    """Representation of a Stib sensor."""
+
     def __init__(self, stop_id, line_id, data, stop_name):
+        """Initialize the sensor."""
         self._stop_id = stop_id
         self._line_id = line_id
         self._data = data
         self._stop_name = stop_name
-        self._name = line_id + " " + self._stop_name
+        self._name = "stib " + stop_id + " " + " " + line_id
         self._state = STATE_UNKNOWN
         self._next = None
         self._next_destination = None
@@ -68,40 +78,51 @@ class StibSensor(Entity):
 
     @property
     def name(self):
+        """Return the name of the sensor."""
         return self._name
 
     @property
     def state(self):
+        """Return the state of the sensor."""
         return self._state
 
     @property
     def device_state_attributes(self):
-        if self._data is not None:
-            return {
-                    ATTR_STOPNAME: self._stop_name,
-                    ATTR_NEXT: self._next,
-                    ATTR_NEXT_DESTINATION: self._next_destination,
-                    ATTR_UPCOMING: self._upcoming,
-                    ATTR_UPCOMING_DESTINATION: self._upcoming_destination,
-                    ATTR_LINE_ID: self._line_id,
-                    }
+        """Return attributes for the sensor."""
+        return {
+            ATTR_STOPNAME: self._stop_name,
+            ATTR_NEXT: self._next,
+            ATTR_NEXT_DESTINATION: self._next_destination,
+            ATTR_UPCOMING: self._upcoming,
+            ATTR_UPCOMING_DESTINATION: self._upcoming_destination,
+            ATTR_LINE_ID: self._line_id,
+            ATTR_ATTRIBUTION: ATTRIBUTION,
+        }
 
     @property
     def icon(self):
-        return 'mdi:bus'
+        """Return the icon of the sensor."""
+        return "mdi:bus"
 
     def update(self):
-        self._data.update()
+        """Get the latest data if needed and update the state attributes."""
+        if (datetime.now() - self._data._last_updated) > (SCAN_INTERVAL / 2):
+            self._data.update()
+
         lines = self._data.lines
-        if lines is not None and self._line_id in lines:
-            passages = lines[self._line_id]
-            self._next = passages[0]['minutes']
-            self._next_destination = passages[0]['destination']
-            self._state = str(self._next) + " (" + self._next_destination + ")"
+        if (
+            lines is not None
+            and self._stop_id in lines
+            and self._line_id in lines[self._stop_id]
+        ):
+            passages = lines[self._stop_id][self._line_id]
+            self._next = passages[0]["minutes"]
+            self._next_destination = passages[0]["destination"]
+            self._state = f"{str(self._next)} ({self._next_destination})"
             if len(passages) == 2:
-                self._upcoming = passages[1]['minutes']
-                self._upcoming_destination = passages[1]['destination']
-                self._state = self._state + " - " + str(self._upcoming) + " (" + self._upcoming_destination + ")"
+                self._upcoming = passages[1]["minutes"]
+                self._upcoming_destination = passages[1]["destination"]
+                self._state = f"{self._state} - {str(self._upcoming)} ({self._upcoming_destination})"
         else:
             self._next = None
             self._next_destination = None
@@ -109,49 +130,78 @@ class StibSensor(Entity):
             self._upcoming_destination = None
             self._state = ""
 
+
 class StibData(object):
-    def __init__(self, stop,  api_key):
-        self.stop = stop
+    """The Class for handling the data retrieval."""
+
+    def __init__(self, stops, api_key, lang):
+        """Initialize the data object."""
+        self.stops = stops
+        self.lang = lang
         self.lines = {}
-        self.api_key = api_key
-        response = requests.get(_POINT_DETAIL_URL + self.stop, headers={'Accept': 'application/json', 'Authorization': 'Bearer ' + self.api_key})
-        try:
-            self.stop_name = response.json()['points'][0]['name']['fr'].title()
-        except:
-            _LOGGER.error("STIB Wrong stopID, check %s", self.stop)
+        self.headers = {
+            "Accept": "application/json",
+            "Authorization": "Bearer " + api_key,
+        }
+        response = requests.get(
+            _POINT_DETAIL_URL + "%2C".join(self.stops), headers=self.headers
+        )
+        self.stop_names = {}
+        for point in response.json()["points"]:
+            self.stop_names[point["id"]] = point["name"][self.lang].title()
+        self._last_updated = None
 
     def update(self):
-        response = requests.get(_RESOURCE + self.stop, headers={'Accept': 'application/json', 'Authorization': 'Bearer  ' + self.api_key})
+        """Get the latest data from opendata-api.stib-mivb.be."""
+        response = requests.get(
+            _PASSING_TIME_URL + "%2C".join(self.stops), headers=self.headers
+        )
         if response.status_code == 200:
-            passing_times = response.json()['points'][0]['passingTimes']
-
             lines = {}
+            for point in response.json()["points"]:
+                pointId = point["pointId"]
+                passingTimes = point["passingTimes"]
 
-            for passing_time in passing_times:
-                line_id = passing_time['lineId']
-                
-                if 'destination' not in passing_time:
-                    continue
-                
-                destination = passing_time['destination']['fr'].title()
-                arrival_time = passing_time['expectedArrivalTime']
-                arrival_datetime = datetime.strptime(arrival_time.split('+')[0], '%Y-%m-%dT%H:%M:%S')
-                minutes = int(round(abs((arrival_datetime - datetime.now()).total_seconds()) / 60))
-                
-                passage = {}
-                passage['minutes'] = minutes
-                passage['destination'] = destination
-                
-                if line_id not in lines:
-                    lines[line_id] = [passage]
-                else:
-                    if minutes < lines[line_id][0]['minutes']:
-                        lines[line_id].insert(0,  passage)
+                point_lines = {}
+
+                for passing_time in passingTimes:
+                    line_id = passing_time["lineId"]
+
+                    if "destination" not in passing_time:
+                        continue
+
+                    destination = passing_time["destination"][self.lang].title()
+                    arrival_time = passing_time["expectedArrivalTime"]
+                    arrival_datetime = datetime.strptime(
+                        arrival_time.split("+")[0], "%Y-%m-%dT%H:%M:%S"
+                    )
+                    minutes = int(
+                        round(
+                            abs((arrival_datetime - datetime.now()).total_seconds())
+                            / 60
+                        )
+                    )
+
+                    passage = {}
+                    passage["minutes"] = minutes
+                    passage["destination"] = destination
+
+                    if line_id not in point_lines:
+                        point_lines[line_id] = [passage]
                     else:
-                        lines[line_id].append(passage)
-                
+                        if minutes < point_lines[line_id][0]["minutes"]:
+                            point_lines[line_id].insert(0, passage)
+                        else:
+                            point_lines[line_id].append(passage)
+                lines[pointId] = point_lines
+            self._last_updated = datetime.now()
+
         else:
-            _LOGGER.error("Impossible to get data from STIB api. Response code: %s. Check %s", response.status_code, response.url)
+            _LOGGER.error(
+                "Impossible to get data from STIB api. Response code: %s. Check %s",
+                response.status_code,
+                response.url,
+            )
             lines = None
 
         self.lines = lines
