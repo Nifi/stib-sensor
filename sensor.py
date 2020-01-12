@@ -23,11 +23,11 @@ ATTR_UPCOMING = "upcoming_departure"
 ATTR_STOPNAME = "stop_name"
 ATTR_NEXT_DESTINATION = "next_destination"
 ATTR_UPCOMING_DESTINATION = "upcoming_destination"
-ATTR_LINE_ID = "line"
+ATTR_LINE = "line"
 
 ATTRIBUTION = "Data provided by opendata-api.stib-mivb.be"
 
-CONF_STOP_LIST = "station_ids"
+CONF_STOP_LIST = "stops"
 CONF_API_KEY = "api_key"
 CONF_LANG = "language"
 DEFAULT_LANG = "fr"
@@ -37,7 +37,7 @@ DEFAULT_NAME = "STIB"
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
         vol.Required(CONF_API_KEY): cv.string,
-        vol.Optional(CONF_STOP_LIST, "station_filter"): vol.All(
+        vol.Optional(CONF_STOP_LIST): vol.All(
             cv.ensure_list, vol.Length(min=1), [cv.string]
         ),
         vol.Optional(CONF_LANG, default=DEFAULT_LANG): vol.In(["fr", "nl"]),
@@ -48,28 +48,28 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 def setup_platform(hass, config, add_devices, discovery_info=None):
     """Create the sensor."""
     api_key = config[CONF_API_KEY]
-    stations_list = set(config.get(CONF_STOP_LIST, []))
+    stops = set(config.get(CONF_STOP_LIST, []))
     lang = config[CONF_LANG]
-    stib_data = StibData(stations_list, api_key, lang)
+    stib_data = StibData(stops, api_key, lang)
     stib_data.update()
     sensors = []
-    for station, point_lines in stib_data.lines.items():
-        stop_name = stib_data.stop_names[station]
+    for stop, point_lines in stib_data.lines.items():
+        stop_name = stib_data.stop_names[stop]
         for line in point_lines:
-            sensors.append(StibSensor(station, line, stib_data, stop_name))
+            sensors.append(StibSensor(stop, line, stib_data, stop_name))
     add_devices(sensors, True)
 
 
 class StibSensor(Entity):
     """Representation of a Stib sensor."""
 
-    def __init__(self, stop_id, line_id, data, stop_name):
+    def __init__(self, stop, line, data, stop_name):
         """Initialize the sensor."""
-        self._stop_id = stop_id
-        self._line_id = line_id
+        self._stop = stop
+        self._line = line
         self._data = data
         self._stop_name = stop_name
-        self._name = "stib " + stop_id + " " + " " + line_id
+        self._name = "stib " + stop + " " + line
         self._state = STATE_UNKNOWN
         self._next = None
         self._next_destination = None
@@ -95,7 +95,7 @@ class StibSensor(Entity):
             ATTR_NEXT_DESTINATION: self._next_destination,
             ATTR_UPCOMING: self._upcoming,
             ATTR_UPCOMING_DESTINATION: self._upcoming_destination,
-            ATTR_LINE_ID: self._line_id,
+            ATTR_LINE: self._line,
             ATTR_ATTRIBUTION: ATTRIBUTION,
         }
 
@@ -112,10 +112,10 @@ class StibSensor(Entity):
         lines = self._data.lines
         if (
             lines is not None
-            and self._stop_id in lines
-            and self._line_id in lines[self._stop_id]
+            and self._stop in lines
+            and self._line in lines[self._stop]
         ):
-            passages = lines[self._stop_id][self._line_id]
+            passages = lines[self._stop][self._line]
             self._next = passages[0]["minutes"]
             self._next_destination = passages[0]["destination"]
             self._state = f"{str(self._next)} ({self._next_destination})"
@@ -165,7 +165,7 @@ class StibData(object):
                 point_lines = {}
 
                 for passing_time in passingTimes:
-                    line_id = passing_time["lineId"]
+                    line = passing_time["lineId"]
 
                     if "destination" not in passing_time:
                         continue
@@ -186,13 +186,13 @@ class StibData(object):
                     passage["minutes"] = minutes
                     passage["destination"] = destination
 
-                    if line_id not in point_lines:
-                        point_lines[line_id] = [passage]
+                    if line not in point_lines:
+                        point_lines[line] = [passage]
                     else:
-                        if minutes < point_lines[line_id][0]["minutes"]:
-                            point_lines[line_id].insert(0, passage)
+                        if minutes < point_lines[line][0]["minutes"]:
+                            point_lines[line].insert(0, passage)
                         else:
-                            point_lines[line_id].append(passage)
+                            point_lines[line].append(passage)
                 lines[pointId] = point_lines
             self._last_updated = datetime.now()
 
